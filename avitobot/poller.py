@@ -31,6 +31,7 @@ class SweepStats:
     fetched: int = 0
     new: int = 0
     candidates: int = 0
+    price_drops: int = 0
     notified: int = 0
     blocked: bool = False
     errors: List[str] = field(default_factory=list)
@@ -39,6 +40,7 @@ class SweepStats:
         if self.blocked:
             return "заблокировано антиботом — нужен российский IP"
         return (f"получено {self.fetched}, новых {self.new}, "
+                f"снижений цены {self.price_drops}, "
                 f"кандидатов {self.candidates}, отправлено {self.notified}")
 
 
@@ -89,7 +91,7 @@ class Poller:
         if not parsed.model:
             return
 
-        is_new = self.storage.upsert_listing(
+        is_new, previous_price = self.storage.upsert_listing(
             id=item["id"], title=item["title"], price=item["price"],
             category=parsed.category, model=parsed.model, variant=parsed.variant,
             battery=parsed.battery,
@@ -100,9 +102,19 @@ class Poller:
             is_clean=1 if parsed.is_clean else 0,
             flags=",".join(parsed.flags),
         )
-        if not is_new:
+
+        # Уже виденное объявление интересно только одним: продавец снизил цену.
+        # Это такое же событие «появилось выгодное предложение», как новая публикация.
+        price_drop = None
+        if is_new:
+            stats.new += 1
+        elif previous_price and item["price"] < previous_price * (1 - self.settings.min_price_drop):
+            price_drop = previous_price
+            stats.price_drops += 1
+            log.info("Снижение цены: %s  %s → %s ₽",
+                     item["title"][:50], previous_price, item["price"])
+        else:
             return
-        stats.new += 1
 
         if not parsed.is_clean:
             return
@@ -142,7 +154,7 @@ class Poller:
                          item["title"], ", ".join(parsed.flag_reasons))
                 return
 
-        item = {**item, "description": description}
+        item = {**item, "description": description, "price_drop": price_drop}
         await self._dispatch(item, parsed, stats)
 
     async def _dispatch(self, item: Dict, parsed, stats: SweepStats) -> None:
@@ -154,8 +166,12 @@ class Poller:
                 "variant": parsed.variant, "variant_label": parsed.variant_label,
                 "battery": parsed.battery}
 
+        # Для снижения цены ключ включает цену, иначе повторная отправка
+        # была бы заблокирована прошлой доставкой этого же объявления.
+        dedup_key = item["id"] if not item.get("price_drop") else f"{item['id']}:{item['price']}"
+
         for user in self.storage.active_users():
-            if self.storage.was_sent(user.user_id, item["id"]):
+            if self.storage.was_sent(user.user_id, dedup_key):
                 continue
             categories = user.category_list
             if categories and parsed.category not in categories:
@@ -187,7 +203,7 @@ class Poller:
 
             try:
                 await self.notifier(user, item, verdict)
-                self.storage.mark_sent(user.user_id, item["id"])
+                self.storage.mark_sent(user.user_id, dedup_key)
                 stats.notified += 1
             except Exception as exc:  # noqa: BLE001
                 log.warning("Не отправлено пользователю %s: %s", user.user_id, exc)

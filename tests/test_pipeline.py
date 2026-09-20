@@ -61,13 +61,20 @@ class FakeAvito:
 
     def __init__(self):
         self.description_calls = []
+        self.overrides = {}          # id → новая цена, имитация правки объявления
 
     async def search(self, query, location_id, page=1, category_id=84, limit=50):
         if page != 1:
             return []
         source = (PHONE_MARKET + PHONE_SPECIALS) if query == "iPhone" \
             else (WATCH_MARKET + WATCH_SPECIALS)
-        return [dict(x) for x in source]
+        out = []
+        for x in source:
+            row = dict(x)
+            if row["id"] in self.overrides:
+                row["price"] = self.overrides[row["id"]]
+            out.append(row)
+        return out
 
     async def fetch_description(self, item_id):
         self.description_calls.append(item_id)
@@ -95,11 +102,20 @@ async def scenario():
     client = FakeAvito()
     poller = Poller(client, storage, settings, notifier=notifier)
     stats = await poller.sweep(pages=1)
-    return storage, client, stats, sent
+
+    # Второй проход: продавец обычного объявления уронил цену со 100 000 до 70 000.
+    # Объявление уже известно боту, но это тоже «появилось выгодное предложение».
+    sent_after_first = len(sent)
+    client.overrides["p3"] = 70000
+    DESCRIPTIONS["p3"] = "Срочно нужны деньги, торг уместен"
+    await poller.sweep(pages=1)
+
+    return storage, client, stats, sent, sent_after_first
 
 
 def run():
-    storage, client, stats, sent = asyncio.run(scenario())
+    storage, client, stats, sent, sent_after_first = asyncio.run(scenario())
+    drops = [s for s in sent[sent_after_first:]]
     both = {s[1]: s for s in sent if s[0] == 1}
     phones_only = {s[1]: s for s in sent if s[0] == 2}
     failures = []
@@ -141,13 +157,25 @@ def run():
     if wasteful:
         failures.append(f"лишние запросы описания: {wasteful}")
 
+    # Снижение цены должно долететь до обоих подписчиков
+    drop_ids = {d[1] for d in drops}
+    if "p3" not in drop_ids:
+        failures.append("снижение цены не отправлено — продавец уронил ценник, бот промолчал")
+    else:
+        for user_id in (1, 2):
+            if not any(d[0] == user_id and d[1] == "p3" for d in drops):
+                failures.append(f"снижение цены не дошло до подписчика {user_id}")
+
     counts = storage.counts()
     print(f"Проход: {stats.summary()}")
     print(f"В базе: {counts['total']} объявлений, чистых {counts['clean']}, "
           f"моделей {counts['models']}")
     print(f"Запросов описания: {len(client.description_calls)} {client.description_calls}")
-    print("Отправлено:")
-    for user_id, item_id, verdict, discount in sent:
+    print("Отправлено в первый проход:")
+    for user_id, item_id, verdict, discount in sent[:sent_after_first]:
+        print(f"  пользователю {user_id}: {item_id} — {verdict}, -{discount:.0%}")
+    print("Отправлено после снижения цены:")
+    for user_id, item_id, verdict, discount in drops:
         print(f"  пользователю {user_id}: {item_id} — {verdict}, -{discount:.0%}")
 
     if failures:

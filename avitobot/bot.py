@@ -241,12 +241,22 @@ def format_deal(item: Dict, verdict: Verdict) -> str:
     variant = item.get("variant_label") or ""
     saving = verdict.saving(item["price"])
 
+    drop = item.get("price_drop")
+    if risky:
+        head = "⚠️ <b>Подозрительно дёшево</b>"
+    elif drop:
+        head = "📉 <b>Продавец снизил цену</b>"
+    else:
+        head = "🔥 <b>Находка</b>"
+
     lines = [
-        "⚠️ <b>Подозрительно дёшево</b>" if risky else "🔥 <b>Находка</b>",
+        head,
         f"{icon} <b>{html.escape(name)}</b>" + (f" · {variant}" if variant else ""),
         "",
         f"💰 <b>{money(item['price'])}</b>   <s>{money(verdict.median_price)}</s> медиана",
     ]
+    if drop:
+        lines.append(f"↘️ Было {money(drop)} — упало на {money(drop - item['price'])}")
     if saving:
         lines.append(f"📉 Дешевле рынка на <b>{verdict.discount:.0%}</b> — "
                      f"экономия {money(saving)}")

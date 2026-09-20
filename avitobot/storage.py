@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Tuple, Sequence
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -107,11 +107,17 @@ class Storage:
 
     # -------------------------------------------------------------- объявления
 
-    def upsert_listing(self, **row) -> bool:
-        """Сохраняет объявление. Возвращает True, если видим его впервые."""
+    def upsert_listing(self, **row) -> Tuple[bool, Optional[int]]:
+        """Сохраняет объявление.
+
+        Возвращает (впервые ли видим, прежняя цена). Прежняя цена нужна,
+        чтобы поймать снижение: продавец уронил ценник — это тоже событие.
+        """
         now = int(time.time())
-        cur = self.conn.execute("SELECT id FROM listings WHERE id = ?", (row["id"],))
-        is_new = cur.fetchone() is None
+        cur = self.conn.execute("SELECT price FROM listings WHERE id = ?", (row["id"],))
+        previous = cur.fetchone()
+        is_new = previous is None
+        previous_price = None if is_new else previous["price"]
         if is_new:
             self.conn.execute(
                 """INSERT INTO listings
@@ -129,7 +135,7 @@ class Storage:
                 (row["price"], now, row["id"]),
             )
         self.conn.commit()
-        return is_new
+        return is_new, previous_price
 
     def market_prices(self, model: str, variant: Optional[int], days: int) -> List[int]:
         """Цены чистых объявлений этой связки за окно — основа для медианы."""

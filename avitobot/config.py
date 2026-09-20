@@ -45,6 +45,8 @@ class Settings:
     scam_floor: float = field(default_factory=lambda: _float("SCAM_FLOOR", 0.45))
     min_sample: int = field(default_factory=lambda: _int("MIN_SAMPLE", 8))
     min_battery: int = field(default_factory=lambda: _int("MIN_BATTERY", 85))
+    # На сколько должна упасть цена, чтобы это считалось событием
+    min_price_drop: float = field(default_factory=lambda: _float("MIN_PRICE_DROP", 0.05))
 
     poll_interval: int = field(default_factory=lambda: _int("POLL_INTERVAL", 180))
     pages_per_sweep: int = field(default_factory=lambda: _int("PAGES_PER_SWEEP", 3))
