@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Бот — запуск",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/bot.py",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Диагностика (--doctor)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "avitobot.main",
+      "args": ["--doctor"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Один проход с дампом (--sweep)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "avitobot.main",
+      "args": ["--sweep"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
