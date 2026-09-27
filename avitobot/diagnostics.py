@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import httpx
 
@@ -16,6 +16,46 @@ from .config import Settings
 from .storage import Storage
 
 OK, WARN, BAD = "✅", "⚠️", "❌"
+
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+APP_UA = "Avito/107.0 (ru.avito.app; build:107; iOS 17.5.1) Alamofire/5.9.1"
+
+# Разные двери в Авито. Нужно понять, закрыты ли все или только часть:
+# robots.txt отвечает на вопрос «забанен ли адрес вообще», остальные —
+# какой способ добычи данных ещё жив.
+PROBES = [
+    ("robots.txt", "https://www.avito.ru/robots.txt", BROWSER_UA),
+    ("Главная", "https://www.avito.ru/", BROWSER_UA),
+    ("Каталог телефонов", "https://www.avito.ru/moskva/telefony/iphone-ASgBAgICAUSkA8SQAQ", BROWSER_UA),
+    ("Мобильный API", "https://m.avito.ru/api/9/items?key={key}&query=iPhone&locationId=637640"
+                      "&categoryId=84&page=1&limit=10&sort=date", APP_UA),
+]
+
+
+async def probe_doors(api_key: str, proxy: Optional[str]) -> List[Tuple[str, str]]:
+    """Стучится во все двери подряд и возвращает, что ответила каждая."""
+    results = []
+    kwargs = {"proxy": proxy} if proxy else {}
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False, **kwargs) as http:
+        for name, url, agent in PROBES:
+            try:
+                response = await http.get(
+                    url.format(key=api_key),
+                    headers={"User-Agent": agent, "Accept-Language": "ru-RU,ru;q=0.9"},
+                )
+                mark = OK if response.status_code == 200 else BAD
+                note = f"HTTP {response.status_code}"
+                retry_after = response.headers.get("retry-after")
+                if retry_after:
+                    note += f", Retry-After: {retry_after}"
+                if 300 <= response.status_code < 400:
+                    location = response.headers.get("location", "")[:60]
+                    note += f" → {location}"
+                results.append((name, f"{mark} {note}"))
+            except Exception as exc:  # noqa: BLE001
+                results.append((name, f"{BAD} {type(exc).__name__}"))
+    return results
 
 
 def _age(seconds: int) -> str:
@@ -53,8 +93,13 @@ async def report(client: AvitoClient, storage: Optional[Storage],
         if country != "RU":
             lines.append("   Авито почти наверняка ответит 403.")
 
+    # ------------------------------------------------ какие двери открыты
+    lines.append("\n<b>Двери Авито</b>")
+    for name, verdict in await probe_doors(settings.api_key, settings.proxy):
+        lines.append(f"{name}: {verdict}")
+
     # ------------------------------------------------ доступ к Авито
-    lines.append("\n<b>Авито</b>")
+    lines.append("\n<b>Разбор выдачи</b>")
     try:
         items = await client.search("iPhone", settings.location_ids[0], page=1,
                                     category_id=settings.category_id)
