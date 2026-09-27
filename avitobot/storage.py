@@ -176,6 +176,28 @@ class Storage:
         ).fetchone()
         return {"total": row["total"] or 0, "clean": row["clean"] or 0, "models": row["models"] or 0}
 
+    def candidates(self, days: int, categories: List[str], models: List[str],
+                   price_min: int, price_max: int, limit: int = 400) -> List[sqlite3.Row]:
+        """Чистые объявления из индекса под фильтры пользователя.
+
+        Используется кнопкой «Найти сейчас»: бот оценивает их заново
+        и показывает лучшие, а не ждёт новой публикации.
+        """
+        since = int(time.time()) - days * 86400
+        sql = ["""SELECT * FROM listings
+                  WHERE is_clean = 1 AND model IS NOT NULL AND first_seen >= ?
+                    AND price BETWEEN ? AND ?"""]
+        params: List = [since, price_min, price_max]
+        if categories:
+            sql.append("AND category IN (%s)" % ",".join("?" * len(categories)))
+            params += categories
+        if models:
+            sql.append("AND model IN (%s)" % ",".join("?" * len(models)))
+            params += models
+        sql.append("ORDER BY first_seen DESC LIMIT ?")
+        params.append(limit)
+        return self.conn.execute(" ".join(sql), params).fetchall()
+
     # -------------------------------------------------------------- пользователи
 
     def upsert_user(self, user_id: int, username: str = "") -> User:

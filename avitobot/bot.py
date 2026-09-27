@@ -57,7 +57,8 @@ ALL_MODELS = IPHONE_MODELS + WATCH_MODELS   # индекс в этом спис�
 PAGE_SIZE = 8
 CATEGORY_ICON = {CATEGORY_IPHONE: "📱", CATEGORY_WATCH: "⌚"}
 
-BTN_SEARCH = "🔍 Что ищем"
+BTN_FIND = "🔎 Найти сейчас"
+BTN_SEARCH = "🎯 Настроить поиск"
 BTN_FILTERS = "⚙️ Фильтры"
 BTN_SAVED = "💾 Сохранённые"
 BTN_MARKET = "📊 Рынок"
@@ -74,6 +75,7 @@ def money(value: Optional[int]) -> str:
 def main_keyboard(user: User) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text=BTN_FIND)],
             [KeyboardButton(text=BTN_SEARCH), KeyboardButton(text=BTN_FILTERS)],
             [KeyboardButton(text=BTN_SAVED), KeyboardButton(text=BTN_MARKET)],
             [KeyboardButton(text=BTN_PAUSE if user.active else BTN_RESUME)],
@@ -329,6 +331,55 @@ async def skip_listing(call: CallbackQuery) -> None:
     await call.answer("Пропущено")
 
 
+# ---------------------------------------------------------------- поиск по запросу
+
+@router.message(F.text == BTN_FIND)
+@router.message(Command("find"))
+async def find_now(message: Message) -> None:
+    """Показывает лучшее из того, что уже известно боту, прямо сейчас."""
+    from .search import best_deals, effective_filters, scanned_count
+
+    user = _user(message)
+    notice = await message.answer("Ищу…")
+
+    scanned = scanned_count(_storage, _settings, user)
+    if not scanned:
+        counts = _storage.counts()
+        if counts["total"] == 0:
+            await notice.edit_text(
+                "База пустая — с Авито не пришло ни одного объявления.\n\n"
+                "Отправьте <code>/doctor</code>: скорее всего антибот Авито "
+                "не пускает нас с текущего адреса.")
+        else:
+            await notice.edit_text(
+                f"Под ваши фильтры ничего не подходит.\n"
+                f"В базе {counts['total']} объявлений — попробуйте расширить бюджет "
+                "или снять ограничение по моделям.")
+        return
+
+    found = best_deals(_storage, _settings, user, limit=5)
+    if not found:
+        min_discount = effective_filters(user, _settings)["min_discount"]
+        await notice.edit_text(
+            f"Просмотрел {scanned} объявлений — ничего дешевле медианы "
+            f"на {min_discount:.0%} сейчас нет.\n\n"
+            "Это нормально: выгодные варианты появляются не каждый час. "
+            "Как только появится — пришлю сам, ждать у кнопки не нужно.")
+        return
+
+    await notice.edit_text(f"Просмотрел {scanned} объявлений, показываю {len(found)} лучших:")
+    for item_row, parsed, verdict in found:
+        item = {
+            "id": item_row["id"], "title": item_row["title"], "price": item_row["price"],
+            "url": item_row["url"], "image": item_row["image"], "region": item_row["region"],
+            "category": parsed.category, "model": parsed.model,
+            "variant_label": parsed.variant_label, "battery": item_row["battery"],
+            "seller_rating": item_row["seller_rating"],
+            "seller_reviews": item_row["seller_reviews"], "photos": item_row["photos"],
+        }
+        await send_deal(message.bot, user, item, verdict)
+
+
 # ---------------------------------------------------------------- сохранённые
 
 @router.message(F.text == BTN_SAVED)
@@ -371,7 +422,8 @@ HELP = """<b>Что я делаю</b>
 заметно дешевле рынка и не выглядит разводом.
 
 <b>Кнопки</b>
-🔍 Что ищем — категории и модели
+🔎 Найти сейчас — показать выгодное из уже известного
+🎯 Настроить поиск — категории и модели
 ⚙️ Фильтры — бюджет, скидка, АКБ
 💾 Сохранённые — отложенные объявления
 📊 Рынок — медианы, которые бот вывел сам
