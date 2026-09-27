@@ -12,16 +12,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from .avito import AvitoBlocked, AvitoClient
+from .avito import AvitoBlocked
 from .config import Settings
 from .normalize import parse
-from .scoring import VERDICT_RISKY, VERDICT_SEND, Verdict, evaluate
+from .scoring import Verdict, evaluate
 from .storage import Storage, User
 
 log = logging.getLogger(__name__)
 
-# По одному запросу на категорию: выдача по дате даёт все свежие объявления
-SEARCH_QUERIES = {"iphone": "iPhone", "watch": "Apple Watch"}
 
 Notifier = Callable[[User, Dict, Verdict], Awaitable[None]]
 
@@ -33,21 +31,31 @@ class SweepStats:
     candidates: int = 0
     price_drops: int = 0
     notified: int = 0
-    blocked: bool = False
+    blocked_sources: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+
+    @property
+    def blocked(self) -> bool:
+        """Проход считается заблокированным, только если не дал вообще ничего."""
+        return bool(self.blocked_sources) and self.fetched == 0
 
     def summary(self) -> str:
         if self.blocked:
-            return "заблокировано антиботом — нужен российский IP"
-        return (f"получено {self.fetched}, новых {self.new}, "
+            return ("заблокировано антиботом: "
+                    + ", ".join(self.blocked_sources)
+                    + " — нужен доверенный IP или письма от сохранённых поисков")
+        head = ""
+        if self.blocked_sources:
+            head = f"недоступны ({', '.join(self.blocked_sources)}); "
+        return (head + f"получено {self.fetched}, новых {self.new}, "
                 f"снижений цены {self.price_drops}, "
                 f"кандидатов {self.candidates}, отправлено {self.notified}")
 
 
 class Poller:
-    def __init__(self, client: AvitoClient, storage: Storage,
+    def __init__(self, sources: List, storage: Storage,
                  settings: Settings, notifier: Optional[Notifier] = None):
-        self.client = client
+        self.sources = sources if isinstance(sources, list) else [sources]
         self.storage = storage
         self.settings = settings
         self.notifier = notifier
@@ -56,36 +64,34 @@ class Poller:
     # ------------------------------------------------------------------ проход
 
     async def sweep(self, pages: Optional[int] = None) -> SweepStats:
+        """Один проход по всем источникам.
+
+        Блокировка одного источника не отменяет проход: письма приходят и
+        тогда, когда прямой опрос режет антибот.
+        """
         stats = SweepStats()
-        pages = pages or self.settings.pages_per_sweep
 
-        for query in SEARCH_QUERIES.values():
-          for location_id in self.settings.location_ids:
-            for page in range(1, pages + 1):
-                try:
-                    items = await self.client.search(
-                        query, location_id, page,
-                        category_id=self.settings.category_id,
-                    )
-                except AvitoBlocked as exc:
-                    log.error("Блокировка: %s", exc)
-                    stats.blocked = True
-                    stats.errors.append(str(exc))
-                    return stats
-                except Exception as exc:  # noqa: BLE001 — один сбой не должен ронять цикл
-                    log.warning("Ошибка запроса стр. %s: %s", page, exc)
-                    stats.errors.append(str(exc))
-                    continue
+        for source in self.sources:
+            try:
+                items = await source.fetch_new(pages=pages)
+            except AvitoBlocked as exc:
+                log.error("%s: блокировка — %s", source.name, exc)
+                stats.blocked_sources.append(source.name)
+                stats.errors.append(f"{source.name}: {exc}")
+                continue
+            except Exception as exc:  # noqa: BLE001 — один сбой не должен ронять цикл
+                log.warning("%s: ошибка — %s", source.name, exc)
+                stats.errors.append(f"{source.name}: {exc}")
+                continue
 
-                if not items:
-                    break
-                stats.fetched += len(items)
-                for item in items:
-                    await self._handle(item, stats)
+            log.info("%s: получено %s", source.name, len(items))
+            stats.fetched += len(items)
+            for item in items:
+                await self._handle(item, source, stats)
 
         return stats
 
-    async def _handle(self, item: Dict, stats: SweepStats) -> None:
+    async def _handle(self, item: Dict, source, stats: SweepStats) -> None:
         """Первый заход: разбор по заголовку, запись в индекс."""
         parsed = parse(item["title"], item.get("description", ""))
         if not parsed.model:
@@ -134,8 +140,10 @@ class Poller:
 
         stats.candidates += 1
 
-        # Второй заход: полный текст — только теперь, когда цена уже заинтересовала
-        description = await self.client.fetch_description(item["id"])
+        # Второй заход: полный текст — только теперь, когда цена уже заинтересовала.
+        # У писем описания нет, флаги остаются посчитанными по заголовку.
+        description = await source.fetch_description(item["id"]) \
+            if source.has_descriptions else ""
         if description:
             parsed = parse(item["title"], description)
             self.storage.upsert_listing(

@@ -13,6 +13,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from avitobot.config import Settings
 from avitobot.poller import Poller
+from avitobot.sources import AvitoSource
 from avitobot.scoring import VERDICT_RISKY, VERDICT_SEND
 from avitobot.storage import Storage
 
@@ -100,7 +101,7 @@ async def scenario():
         sent.append((user.user_id, item["id"], verdict.verdict, verdict.discount))
 
     client = FakeAvito()
-    poller = Poller(client, storage, settings, notifier=notifier)
+    poller = Poller([AvitoSource(client, settings)], storage, settings, notifier=notifier)
     stats = await poller.sweep(pages=1)
 
     # Второй проход: продавец обычного объявления уронил цену со 100 000 до 70 000.

@@ -117,6 +117,21 @@ async def report(client: AvitoClient, storage: Optional[Storage],
         lines.append(f"{BAD} ошибка запроса: {exc}")
         code = 3
 
+    # ------------------------------------------------ письма
+    lines.append("\n<b>Письма Авито</b>")
+    if not (settings.imap_host and settings.imap_user and settings.imap_password):
+        lines.append(f"{WARN} не настроены — задайте IMAP_HOST, IMAP_USER, IMAP_PASSWORD")
+        lines.append("   Это второй источник, он работает даже когда антибот режет опрос.")
+    else:
+        from .mail import Mailbox
+        mailbox = Mailbox(settings.imap_host, settings.imap_user, settings.imap_password,
+                          settings.imap_folder, settings.imap_sender)
+        try:
+            lines.append(f"{OK} {await mailbox.probe()}")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"{BAD} {type(exc).__name__}: {exc}")
+            code = max(code, 1)
+
     # ------------------------------------------------ живучесть базы
     if storage is not None:
         lines.append("\n<b>База</b>")

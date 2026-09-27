@@ -22,6 +22,7 @@ from . import bot as bot_module
 from .avito import AvitoBlocked, AvitoClient
 from .config import settings
 from .poller import Poller
+from .sources import build_sources
 from .storage import Storage, User
 
 log = logging.getLogger("avitobot")
@@ -57,7 +58,7 @@ async def one_sweep() -> int:
     storage = Storage(settings.db_path)
     client = build_client(dump=True)
     try:
-        poller = Poller(client, storage, settings, notifier=None)
+        poller = Poller(build_sources(client, settings), storage, settings, notifier=None)
         stats = await poller.sweep(pages=2)
         print(stats.summary())
         if stats.errors:
@@ -88,7 +89,7 @@ async def run() -> None:
     async def notifier(user: User, item: dict, verdict) -> None:
         await bot_module.send_deal(bot, user, item, verdict)
 
-    poller = Poller(client, storage, settings, notifier=notifier)
+    poller = Poller(build_sources(client, settings), storage, settings, notifier=notifier)
 
     # Чужой вебхук или зависший опрос мешают getUpdates — снимаем перед стартом
     try:

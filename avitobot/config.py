@@ -71,6 +71,13 @@ class Settings:
     requests_per_minute: int = field(default_factory=lambda: _int("REQUESTS_PER_MINUTE", 20))
     median_window_days: int = field(default_factory=lambda: _int("MEDIAN_WINDOW_DAYS", 21))
 
+    # Второй источник: письма Авито о новых объявлениях по сохранённому поиску
+    imap_host: str = field(default_factory=lambda: os.getenv("IMAP_HOST", ""))
+    imap_user: str = field(default_factory=lambda: os.getenv("IMAP_USER", ""))
+    imap_password: str = field(default_factory=lambda: os.getenv("IMAP_PASSWORD", ""))
+    imap_folder: str = field(default_factory=lambda: os.getenv("IMAP_FOLDER", "INBOX"))
+    imap_sender: str = field(default_factory=lambda: os.getenv("IMAP_SENDER", "avito.ru"))
+
     db_path: str = field(default_factory=lambda: _db_path())
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
