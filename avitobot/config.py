@@ -26,6 +26,23 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+def _db_path() -> str:
+    """Путь к базе.
+
+    BotHost выдаёт каталог DATA_DIR, который переживает пересборку образа;
+    всё остальное в контейнере стирается. Без него база ляжет рядом с кодом,
+    и ценовой индекс будет обнуляться при каждом редеплое.
+    """
+    explicit = os.getenv("DB_PATH")
+    if explicit:
+        return explicit
+    data_dir = os.getenv("DATA_DIR")
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, "avito.db")
+    return "avito.db"
+
+
 @dataclass
 class Settings:
     bot_token: str = field(default_factory=lambda: os.getenv("BOT_TOKEN", ""))
@@ -54,7 +71,7 @@ class Settings:
     requests_per_minute: int = field(default_factory=lambda: _int("REQUESTS_PER_MINUTE", 20))
     median_window_days: int = field(default_factory=lambda: _int("MEDIAN_WINDOW_DAYS", 21))
 
-    db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "avito.db"))
+    db_path: str = field(default_factory=lambda: _db_path())
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
 

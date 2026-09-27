@@ -15,6 +15,7 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from . import bot as bot_module
@@ -75,7 +76,11 @@ async def run() -> None:
 
     storage = Storage(settings.db_path)
     client = build_client()
-    bot = Bot(settings.bot_token,
+
+    # Таймаут по умолчанию слишком короткий для контейнера хостинга: первый же
+    # запрос к api.telegram.org не укладывается, и бот падает на старте.
+    session = AiohttpSession(timeout=60)
+    bot = Bot(settings.bot_token, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
     dispatcher.include_router(bot_module.setup(storage, settings, client))
@@ -85,9 +90,16 @@ async def run() -> None:
 
     poller = Poller(client, storage, settings, notifier=notifier)
 
+    # Чужой вебхук или зависший опрос мешают getUpdates — снимаем перед стартом
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("delete_webhook: %s", exc)
+
     poll_task = asyncio.create_task(poller.run_forever())
-    log.info("Бот запущен. Регион: %s, бюджет %s—%s ₽",
-             settings.location_ids, settings.price_min, settings.price_max)
+    log.info("Бот запущен. Регион: %s, бюджет %s—%s ₽, база %s",
+             settings.location_ids, settings.price_min, settings.price_max,
+             settings.db_path)
     try:
         await dispatcher.start_polling(bot)
     finally:
